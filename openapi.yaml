@@ -8,8 +8,8 @@ info:
     to take action on the farm; these tools only read.
   version: "1.0.0"
 servers:
-  - url: https://REPLACE_WITH_DEPLOYED_HOST/api/tools
-    description: Replace with the deployed Vercel URL before wiring into Agent Builder.
+  - url: https://render-farm-triage.vercel.app/api/tools
+    description: Production (stable domain — not the per-deploy hashed URL, which changes on every deploy).
 
 paths:
   /get-failure-summary:
@@ -366,6 +366,49 @@ components:
             - concentration above base rate
             - no concentration above base rate
 
+    ContiguousWindow:
+      type: object
+      description: >
+        Only present, and only meaningful, when dimension = time_bucket.
+        Fixed 10-minute buckets can split one contiguous transient event
+        across two buckets purely because of where the bucket edge falls,
+        understating its concentration for a reason unrelated to the fault
+        (e.g. a stall running 02:08:24-02:18:36 straddles the 02:10 bucket
+        edge). This states the actual, boundary-independent span containing
+        every failure in the tested subset, and how many attempts of any
+        status fell inside that same span — a companion to the fixed-bucket
+        breakdown in `values`, not a replacement for it.
+      properties:
+        start:
+          type: string
+          description: Earliest started_at among the failure subset.
+        end:
+          type: string
+          description: Latest started_at among the failure subset.
+        span_minutes:
+          type: integer
+          description: Ceil of (end - start) in minutes.
+        failures_in_span:
+          type: integer
+          description: Number of subset failures whose started_at falls within [start, end] — by construction, all of them.
+        total_failures:
+          type: integer
+          description: Total failures in the tested subset (same value as data.total_failures).
+        attempts_in_span:
+          type: integer
+          description: Total attempts of ANY status (failed or not) with started_at within [start, end].
+        share_of_span:
+          type: number
+          description: failures_in_span / attempts_in_span.
+      required:
+        - start
+        - end
+        - span_minutes
+        - failures_in_span
+        - total_failures
+        - attempts_in_span
+        - share_of_span
+
     ConcentrationResponse:
       type: object
       properties:
@@ -398,6 +441,8 @@ components:
             rows_truncated:
               type: boolean
               description: "True if more distinct values exist than were returned (capped at ~50)."
+            contiguous_window:
+              $ref: "#/components/schemas/ContiguousWindow"
 
     SplitBucket:
       type: object
