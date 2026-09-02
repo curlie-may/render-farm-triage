@@ -51,8 +51,8 @@ curl -s -m 60 "$BASE_URL/api/tools/test-dimension-concentration?dimension=shot_i
 hr
 echo "3c) test_dimension_concentration(time_bucket) restricted to error_class=texture_io"
 echo "   Expected: strongest 10-min bucket 02:10:00 holds 13/14 (the 02:08:24-02:18:36 stall straddles"
-echo "   that bucket edge) -> strong concentration; contiguous_window reports 14 of 14 in an 11-minute"
-echo "   boundary-independent span (02:08:24 to 02:18:36)"
+echo "   that bucket edge) -> strong concentration; contiguous_window reports 14 of 14 in a boundary-"
+echo "   independent 11-minute span (02:08:24 to 02:18:36)"
 curl -s -m 60 "$BASE_URL/api/tools/test-dimension-concentration?dimension=time_bucket&error_class=texture_io" | pp
 
 hr

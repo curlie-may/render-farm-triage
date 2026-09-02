@@ -230,8 +230,8 @@ export async function GET(req: NextRequest) {
 
     const clusterSentence =
       contiguousWindow && tightlyClustered
-        ? ` ${contiguousWindow.failures_in_span} of ${contiguousWindow.total_failures} failures fall within ` +
-          `a ${contiguousWindow.span_minutes}-minute window (${contiguousWindow.start} to ${contiguousWindow.end}), ` +
+        ? ` ${contiguousWindow.failures_in_span} of ${contiguousWindow.total_failures} failures fall within a ` +
+          `${contiguousWindow.span_minutes}-minute span (${contiguousWindow.start} to ${contiguousWindow.end}), ` +
           `against ${contiguousWindow.attempts_in_span} attempts in that span.`
         : "";
 
