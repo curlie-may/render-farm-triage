@@ -1,0 +1,496 @@
+openapi: 3.1.0
+info:
+  title: Render Farm Triage Tools
+  description: >
+    Six read-only diagnostic tools over a night's render farm task-attempt
+    history. Use them together to find which failures share a root cause,
+    which are unrelated noise, and what remediation order makes sense — never
+    to take action on the farm; these tools only read.
+  version: "1.0.0"
+servers:
+  - url: https://REPLACE_WITH_DEPLOYED_HOST/api/tools
+    description: Replace with the deployed Vercel URL before wiring into Agent Builder.
+
+paths:
+  /get-failure-summary:
+    get:
+      operationId: get_failure_summary
+      summary: What failed overnight, and how many of those are actually distinct problems?
+      description: >
+        Entry point for triage. Returns total attempts, total failure rows,
+        and — critically — the number of UNIQUE failed tasks after deduping
+        retries on task_id, since every retried task produces multiple
+        failure rows that inflate a naive row count. Also breaks failures
+        down by error_class (rows and unique tasks per class) so you know
+        what mechanisms are present before picking a dimension to test.
+        Call this first, before any other tool.
+      parameters: []
+      responses:
+        "200":
+          description: >
+            Always 200. A structured `error` field is used for failures
+            instead of a 4xx/5xx status.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FailureSummaryResponse"
+
+  /classify-error-samples:
+    get:
+      operationId: classify_error_samples
+      summary: What does an error_class actually say, in the render's own words?
+      description: >
+        Returns representative full error_text samples for one error_class,
+        with counts, plus the distinct shot_ids and node_groups that class
+        touches. Use this to infer the underlying mechanism (OOM vs I/O vs
+        license vs disk) from the actual log text rather than trusting the
+        class label alone — two different faults can share the same
+        error_class and look identical until you read the text.
+      parameters:
+        - name: error_class
+          in: query
+          required: true
+          schema:
+            type: string
+          description: The error_class to sample, e.g. "oom", "texture_io", "license_timeout".
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 10
+            default: 3
+          description: Max number of distinct error_text samples to return (1-10, default 3).
+      responses:
+        "200":
+          description: Always 200.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ClassifySamplesResponse"
+
+  /test-dimension-concentration:
+    get:
+      operationId: test_dimension_concentration
+      summary: Does a specific dimension (node group, shot, node, time, ...) concentrate failures above its normal share of the batch?
+      description: >
+        The core analytical tool. For every value of the chosen dimension,
+        compares its share of a failure subset against its share of ALL
+        attempts in the window (the base rate) using an exact two-sided
+        binomial test, Bonferroni-corrected across every distinct value of
+        that dimension. Returns a verdict per value ("strong concentration",
+        "concentration above base rate", or "no concentration above base
+        rate") plus a dimension-level verdict. A dimension lighting up is a
+        HYPOTHESIS, not a finding — always follow up with
+        check_success_elsewhere before attributing root cause to it. To
+        isolate a specific fault group, filter with error_class (comma-
+        separated to include several classes) or exclude_error_class
+        (comma-separated to exclude, e.g. exclude oom and texture_io to
+        isolate the miscellaneous residual). If NO value in the dimension
+        clears significance, the tool says so explicitly — that sentence is
+        the correct answer when a fault group is genuinely patternless, and
+        you should report that rather than inventing a story.
+      parameters:
+        - name: dimension
+          in: query
+          required: true
+          schema:
+            type: string
+            enum:
+              - node_group
+              - node_id
+              - shot_id
+              - job_id
+              - renderer_version
+              - submitted_by
+              - uses_hair_shader
+              - error_class
+              - time_bucket
+          description: >
+            Which dimension to test for concentration. time_bucket groups
+            started_at into 10-minute buckets.
+        - name: error_class
+          in: query
+          required: false
+          schema:
+            type: string
+          description: >
+            Restrict the failure subset to these error_class value(s),
+            comma-separated (e.g. "oom" or "license_timeout,disk_full").
+            Omit to test all failures.
+        - name: exclude_error_class
+          in: query
+          required: false
+          schema:
+            type: string
+          description: >
+            Exclude these error_class value(s) from the failure subset,
+            comma-separated (e.g. "oom,texture_io" to isolate every other
+            failure class as the residual). Do not combine with error_class.
+        - name: start
+          in: query
+          required: false
+          schema:
+            type: string
+          description: Override the window start (default is the full batch window). Format "YYYY-MM-DD HH:MM:SS".
+        - name: end
+          in: query
+          required: false
+          schema:
+            type: string
+          description: Override the window end (default is the full batch window). Format "YYYY-MM-DD HH:MM:SS".
+      responses:
+        "200":
+          description: Always 200.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ConcentrationResponse"
+
+  /check-success-elsewhere:
+    get:
+      operationId: check_success_elsewhere
+      summary: For a suspected culprit value, does it fail unevenly across some OTHER dimension (node group, renderer version, hair shader, before/after the 23:00 maintenance window) — or does it fail everywhere regardless?
+      description: >
+        A descriptive contingency breakdown, NOT a hypothesis test — it never
+        returns a p-value. Given a dimension and a value (e.g. shot_id =
+        "shot_012") and a split_by dimension, returns attempts / successes /
+        failures / failure_rate per split_by bucket, plus a plain-language
+        summary chosen by a fixed ratio threshold (the worst bucket's rate is
+        at least 5x the best non-zero bucket's rate = "uneven"; otherwise
+        "comparable"). Try MORE THAN ONE split_by before concluding a value is
+        node-located: split_by=node_group tests whether reassigning the task
+        to another group would help, but split_by=renderer_version or
+        split_by=before_after_2300 can reveal the REAL axis a fault moves
+        along when it happens to correlate with node_group only because a
+        version rollout or maintenance window was scoped to one group (e.g.
+        the four Fault A hair shots fail overwhelmingly on renderer_version =
+        7.3.1 and after 23:00, not on "group B" as such — node_group is a
+        proxy, not the cause, for a fleet where a version is scoped to a
+        group). split_by=uses_hair_shader tests whether a fault is
+        content-type-specific. Concentration testing across the WHOLE
+        dataset (which shots, which nodes, etc. concentrate failures at all)
+        is test_dimension_concentration's job, not this tool's — this tool
+        only describes one already-suspected value's own breakdown.
+      parameters:
+        - name: dimension
+          in: query
+          required: true
+          schema:
+            type: string
+            enum:
+              - node_group
+              - node_id
+              - shot_id
+              - job_id
+              - renderer_version
+              - submitted_by
+          description: Which dimension the suspected value belongs to.
+        - name: value
+          in: query
+          required: true
+          schema:
+            type: string
+          description: The specific value to test, e.g. "shot_012" for dimension=shot_id.
+        - name: split_by
+          in: query
+          required: true
+          schema:
+            type: string
+            enum:
+              - node_group
+              - renderer_version
+              - uses_hair_shader
+              - before_after_2300
+          description: >
+            Which OTHER dimension to break the failure rate down by.
+            before_after_2300 splits on whether started_at is before or after
+            the 23:00 maintenance window. Do not default to node_group only —
+            renderer_version and before_after_2300 are frequently the axis
+            that actually explains the fault when a version or maintenance
+            event was scoped to a single node group.
+        - name: error_class
+          in: query
+          required: false
+          schema:
+            type: string
+          description: Restrict the FAILURE side of the breakdown to this error_class (successes are never filtered by this).
+      responses:
+        "200":
+          description: Always 200.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessElsewhereResponse"
+
+  /query-similar-past-incidents:
+    get:
+      operationId: query_similar_past_incidents
+      summary: Has something like this happened before, and how was it fixed (or misdiagnosed)?
+      description: >
+        Retrieves prior incidents from the farm's incident history, ranked
+        by error_class match first and then by keyword overlap between the
+        supplied dimension_signature and each incident's own signature and
+        symptom summary. Returns up to 4 incidents — deliberately including
+        near-misses with a DIFFERENT root cause but a similar symptom, since
+        confusing two similar-looking incidents is a real failure mode this
+        tool exists to prevent. Read the root_cause and remediation of each
+        returned incident carefully; do not assume the top result is
+        automatically the right analogy.
+      parameters:
+        - name: error_class
+          in: query
+          required: true
+          schema:
+            type: string
+          description: The error_class of the current failures, e.g. "oom".
+        - name: dimension_signature
+          in: query
+          required: false
+          schema:
+            type: string
+          description: >
+            Free text describing the current concentration pattern, e.g.
+            "node_group B, hair shader shots, onset after maintenance
+            window". Used only for keyword-overlap ranking against past
+            incidents' own dimension_signature and symptom_summary.
+      responses:
+        "200":
+          description: Always 200.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PastIncidentsResponse"
+
+  /get-farm-capacity:
+    get:
+      operationId: get_farm_capacity
+      summary: How much farm capacity is available, and what does a re-queue of N tasks cost in node-hours?
+      description: >
+        Returns the CURRENT fleet state per node group (node counts, memory
+        per node, cpu cores, and current renderer_version — which reflects
+        whatever has happened since the batch, e.g. a rollback, and can
+        legitimately differ from renderer_version values seen on old
+        attempt rows), available node-hours over a given window, and the
+        batch's mean task duration so a re-queue's cost can be estimated
+        before deciding on a remediation order.
+      parameters:
+        - name: window_hours
+          in: query
+          required: false
+          schema:
+            type: number
+            default: 8
+          description: Size of the capacity window in hours (default 8).
+      responses:
+        "200":
+          description: Always 200.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FarmCapacityResponse"
+
+components:
+  schemas:
+    ErrorField:
+      type: object
+      properties:
+        error:
+          type: string
+      required: [error]
+
+    FailureSummaryResponse:
+      type: object
+      properties:
+        summary:
+          type: string
+        data:
+          type: object
+          properties:
+            window:
+              type: object
+              properties:
+                start: { type: string }
+                end: { type: string }
+            total_attempts: { type: integer }
+            total_failure_rows: { type: integer }
+            unique_failed_tasks: { type: integer }
+            by_error_class:
+              type: array
+              items:
+                type: object
+                properties:
+                  error_class: { type: string, nullable: true }
+                  failure_rows: { type: integer }
+                  unique_tasks: { type: integer }
+
+    ClassifySamplesResponse:
+      type: object
+      properties:
+        summary: { type: string }
+        data:
+          type: object
+          properties:
+            error_class: { type: string }
+            total_rows: { type: integer }
+            unique_tasks: { type: integer }
+            distinct_shot_ids:
+              type: array
+              items: { type: string }
+            distinct_node_groups:
+              type: array
+              items: { type: string }
+            samples:
+              type: array
+              items:
+                type: object
+                properties:
+                  error_text: { type: string }
+                  count: { type: integer }
+
+    ConcentrationValue:
+      type: object
+      properties:
+        value: { description: "The dimension value (string, boolean, or timestamp)." }
+        attempts: { type: integer, description: "This value's attempt count across ALL statuses (the population)." }
+        expected_share: { type: number, description: "attempts / total_attempts — the base rate." }
+        observed_failures: { type: integer }
+        observed_share: { type: number, description: "observed_failures / total_failures in the subset." }
+        p_value: { type: number }
+        p_corrected: { type: number, description: "Bonferroni-corrected across every distinct value of this dimension." }
+        verdict:
+          type: string
+          enum:
+            - strong concentration
+            - concentration above base rate
+            - no concentration above base rate
+
+    ConcentrationResponse:
+      type: object
+      properties:
+        summary: { type: string }
+        data:
+          type: object
+          properties:
+            dimension: { type: string }
+            window:
+              type: object
+              properties:
+                start: { type: string }
+                end: { type: string }
+            error_class_filter:
+              type: array
+              items: { type: string }
+              nullable: true
+            exclude_error_class_filter:
+              type: array
+              items: { type: string }
+              nullable: true
+            total_attempts: { type: integer }
+            total_failures: { type: integer }
+            n_values_tested: { type: integer }
+            verdict: { type: string }
+            values:
+              type: array
+              items:
+                $ref: "#/components/schemas/ConcentrationValue"
+            rows_truncated:
+              type: boolean
+              description: "True if more distinct values exist than were returned (capped at ~50)."
+
+    SplitBucket:
+      type: object
+      properties:
+        bucket: { description: "The split_by bucket value (string, or boolean for uses_hair_shader)." }
+        attempts: { type: integer }
+        successes: { type: integer }
+        failures: { type: integer }
+        failure_rate: { type: number }
+
+    SuccessElsewhereResponse:
+      type: object
+      properties:
+        summary:
+          type: string
+          description: >
+            Plain-language description of the breakdown, chosen by a fixed
+            ratio threshold — never a p-value or significance claim.
+        data:
+          type: object
+          properties:
+            dimension: { type: string }
+            value: { type: string }
+            split_by:
+              type: string
+              enum: [node_group, renderer_version, uses_hair_shader, before_after_2300]
+            error_class_filter: { type: string, nullable: true }
+            window:
+              type: object
+              properties:
+                start: { type: string }
+                end: { type: string }
+                maintenance_start: { type: string }
+            buckets:
+              type: array
+              items:
+                $ref: "#/components/schemas/SplitBucket"
+              description: Sorted descending by failure_rate.
+            uneven_ratio_threshold:
+              type: number
+              description: "Fixed threshold used to call a split 'uneven' (highest rate / lowest non-zero rate)."
+            min_meaningful_rate:
+              type: number
+              description: "Below this absolute rate, the worst bucket still isn't flagged — avoids reading a single incidental failure against an all-zero baseline as a signal."
+
+    PastIncidentsResponse:
+      type: object
+      properties:
+        summary: { type: string }
+        data:
+          type: object
+          properties:
+            error_class: { type: string }
+            dimension_signature: { type: string, nullable: true }
+            incidents:
+              type: array
+              items:
+                type: object
+                properties:
+                  incident_id: { type: string }
+                  occurred_on: { type: string }
+                  title: { type: string }
+                  error_class: { type: string }
+                  matches_error_class: { type: boolean }
+                  keyword_overlap_score: { type: integer }
+                  symptom_summary: { type: string }
+                  dimension_signature: { type: string }
+                  root_cause: { type: string }
+                  remediation: { type: string }
+                  outcome: { type: string }
+                  time_to_resolve_min: { type: integer }
+
+    FarmCapacityResponse:
+      type: object
+      properties:
+        summary: { type: string }
+        data:
+          type: object
+          properties:
+            window_hours: { type: number }
+            groups:
+              type: array
+              items:
+                type: object
+                properties:
+                  node_group: { type: string }
+                  node_count: { type: integer }
+                  online_count: { type: integer }
+                  mem_gb: { type: integer }
+                  cpu_cores: { type: integer }
+                  renderer_version: { type: string }
+            total_nodes: { type: integer }
+            total_online_nodes: { type: integer }
+            available_node_hours: { type: number }
+            mean_task_duration_sec: { type: number }
+            mean_task_duration_min: { type: number }

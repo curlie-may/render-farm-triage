@@ -1,0 +1,18 @@
+.env.local
+.env
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# node / next.js
+/node_modules
+/.pnp
+.pnp.*
+/.next/
+/out/
+/build
+*.tsbuildinfo
+next-env.d.ts
+npm-debug.log*
+.vercel
