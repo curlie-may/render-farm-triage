@@ -28,6 +28,19 @@ interface CountRow {
   n: number;
 }
 
+interface SpanRow {
+  span_start: string;
+  span_end: string;
+  failures_in_span: number;
+  span_seconds: number;
+  window_seconds: number;
+}
+
+/** Fraction of the batch window under which a failure span counts as
+ * "tightly clustered" enough to state a boundary-independent window,
+ * alongside the (boundary-dependent) fixed-bucket breakdown. */
+const CONTIGUOUS_WINDOW_MAX_SHARE_OF_BATCH = 0.05;
+
 function parseList(param: string | null): string[] | null {
   if (!param) return null;
   const items = param
@@ -107,6 +120,61 @@ export async function GET(req: NextRequest) {
       return jsonError(`No attempts found in window ${start} to ${end}.`);
     }
 
+    // Boundary-independent companion to the time_bucket breakdown: a fixed
+    // bucket edge (e.g. :10) can split one contiguous event across two
+    // buckets, understating its concentration for a reason that has nothing
+    // to do with the underlying fault (see the Fault C 02:08:24-02:18:36
+    // stall, which straddles the 02:10 edge). This finds the actual span of
+    // the failure subset and how many attempts of any status fell inside it.
+    let contiguousWindow: {
+      start: string;
+      end: string;
+      span_minutes: number;
+      failures_in_span: number;
+      total_failures: number;
+      attempts_in_span: number;
+      share_of_span: number;
+    } | null = null;
+    let tightlyClustered = false;
+
+    if (dimension === "time_bucket" && totalFailures > 0) {
+      const [span] = await queryRows<SpanRow>(
+        `SELECT
+           min(started_at) AS span_start,
+           max(started_at) AS span_end,
+           count() AS failures_in_span,
+           dateDiff('second', min(started_at), max(started_at)) AS span_seconds,
+           dateDiff('second', toDateTime({start:DateTime}), toDateTime({end:DateTime})) AS window_seconds
+         FROM render_task_attempts
+         WHERE ${subsetWhere}
+           AND started_at >= {start:DateTime} AND started_at < {end:DateTime}`,
+        subsetParams
+      );
+
+      const [{ n: attemptsInSpan }] = await queryRows<CountRow>(
+        `SELECT count() AS n FROM render_task_attempts
+         WHERE started_at >= {span_start:DateTime} AND started_at <= {span_end:DateTime}`,
+        { span_start: span.span_start, span_end: span.span_end }
+      );
+
+      const spanMinutes = Math.ceil(span.span_seconds / 60);
+      const shareOfSpan = attemptsInSpan > 0 ? span.failures_in_span / attemptsInSpan : 0;
+
+      contiguousWindow = {
+        start: span.span_start,
+        end: span.span_end,
+        span_minutes: spanMinutes,
+        failures_in_span: span.failures_in_span,
+        total_failures: totalFailures,
+        attempts_in_span: attemptsInSpan,
+        share_of_span: shareOfSpan,
+      };
+
+      tightlyClustered =
+        span.failures_in_span === totalFailures &&
+        span.span_seconds < CONTIGUOUS_WINDOW_MAX_SHARE_OF_BATCH * span.window_seconds;
+    }
+
     const k = popRows.length; // number of distinct dimension values tested, matching FAULTS.md's Bonferroni convention
     const subsetMap = new Map<string, number>();
     for (const r of subsetRows) {
@@ -160,11 +228,19 @@ export async function GET(req: NextRequest) {
         ? ` excluding error_class in [${excludeClasses.join(", ")}]`
         : "";
 
+    const clusterSentence =
+      contiguousWindow && tightlyClustered
+        ? ` ${contiguousWindow.failures_in_span} of ${contiguousWindow.total_failures} failures fall within ` +
+          `a ${contiguousWindow.span_minutes}-minute window (${contiguousWindow.start} to ${contiguousWindow.end}), ` +
+          `against ${contiguousWindow.attempts_in_span} attempts in that span.`
+        : "";
+
     const summary =
       `Concentration test on '${dimension}'${filterDesc}: ${totalFailures} failure rows tested against ` +
       `${totalAttempts} total attempts, ${k} distinct values, Bonferroni-corrected across ${k} hypotheses. ` +
       dimensionVerdictStr +
-      ".";
+      "." +
+      clusterSentence;
 
     return jsonOk(
       roundDeep({
@@ -180,6 +256,7 @@ export async function GET(req: NextRequest) {
           verdict: dimensionVerdictStr,
           values: topValues,
           rows_truncated: values.length > MAX_ROWS,
+          ...(dimension === "time_bucket" ? { contiguous_window: contiguousWindow } : {}),
         },
       })
     );
