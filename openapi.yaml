@@ -235,9 +235,20 @@ paths:
         symptom summary. Returns up to 4 incidents — deliberately including
         near-misses with a DIFFERENT root cause but a similar symptom, since
         confusing two similar-looking incidents is a real failure mode this
-        tool exists to prevent. Read the root_cause and remediation of each
-        returned incident carefully; do not assume the top result is
-        automatically the right analogy.
+        tool exists to prevent. Each incident carries match_score,
+        match_basis, and match_strength (strong/partial/weak, from fixed
+        thresholds on keyword overlap) plus a server-written match_note
+        explaining what actually matched — a "weak" incident shares only the
+        error_class and nothing on the dimension_signature, and its
+        match_note says so plainly: it is a comparison, not an explanation.
+        Do not treat a returned incident's root_cause as applying to the
+        current problem unless its match_strength says so; a shared
+        error_class alone means the failures LOOK alike, not that they share
+        a cause. The top-level summary also states how many of the returned
+        incidents are weak matches. Note: incidents no longer carry a
+        `title` field — a past incident's title names a different problem
+        and has no legitimate use in diagnosing this one; use incident_id
+        and occurred_on to refer to it instead.
       parameters:
         - name: error_class
           in: query
@@ -504,10 +515,38 @@ components:
                 properties:
                   incident_id: { type: string }
                   occurred_on: { type: string }
-                  title: { type: string }
                   error_class: { type: string }
                   matches_error_class: { type: boolean }
                   keyword_overlap_score: { type: integer }
+                  match_score:
+                    type: integer
+                    description: >
+                      The full ranking score (error_class match bonus plus
+                      keyword_overlap_score). Higher ranks first; this is
+                      what determined the incident's place in the top 4, not
+                      a measure of how well it explains the current problem.
+                  match_basis:
+                    type: string
+                    description: >
+                      What actually matched — error class only, error class
+                      plus keyword overlap (with the matched keywords named),
+                      or a differing error class with only incidental
+                      keyword overlap.
+                  match_strength:
+                    type: string
+                    enum: [strong, partial, weak]
+                    description: >
+                      Fixed-threshold classification of match_basis. "weak"
+                      means the incident shares only error_class (or not
+                      even that) with essentially no keyword overlap — it is
+                      a comparison, never an explanation.
+                  match_note:
+                    type: string
+                    description: >
+                      Server-generated sentence explaining match_strength in
+                      plain language. For a weak match this states directly
+                      that the incident is offered for comparison, not as an
+                      explanation of the current problem.
                   symptom_summary: { type: string }
                   dimension_signature: { type: string }
                   root_cause: { type: string }

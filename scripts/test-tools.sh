@@ -78,12 +78,22 @@ curl -s -m 60 "$BASE_URL/api/tools/check-success-elsewhere?dimension=shot_id&val
 
 hr
 echo "5) query_similar_past_incidents(error_class=texture_io)"
-echo "   Expected: includes inc_20260814_001 (2026-08-14 NFS texture filer stall), plus near-misses"
+echo "   Expected: includes inc_20260814_001 (2026-08-14 NFS texture filer stall), plus near-misses."
+echo "   No dimension_signature supplied -> zero keyword overlap possible, so every incident whose"
+echo "   error_class is texture_io is match_strength=weak (error class only) and every non-texture_io"
+echo "   incident is also weak (class differs). No 'title' field in the response (removed by design —"
+echo "   a past incident's title names a different problem, so it's dropped everywhere)."
 curl -s -m 60 "$BASE_URL/api/tools/query-similar-past-incidents?error_class=texture_io" | pp
 
 hr
 echo "5b) query_similar_past_incidents(error_class=oom, dimension_signature=node_group hair shader memory regression)"
-echo "   Expected: past hair-shader / memory-regression incidents rank above unrelated oom incidents"
+echo "   Expected: past hair-shader / memory-regression incidents rank above unrelated oom incidents,"
+echo "   with match_strength=strong or partial (>=1 keyword overlap on 'hair'/'shader'/'group'/etc.)."
+echo "   inc_20260805_001 (the subdivision/geometry near-miss, unrelated to this signature) still"
+echo "   surfaces in the top 4 on error_class alone, but now comes back match_strength=weak, with a"
+echo "   match_note stating plainly it's a comparison, not an explanation -- root_cause is still"
+echo "   returned in full (it's still instructive as a near-miss), but there's no 'title' field to"
+echo "   accidentally borrow language from, and the summary states how many of the 4 are weak matches."
 curl -s -m 60 "$BASE_URL/api/tools/query-similar-past-incidents?error_class=oom&dimension_signature=node%20group%20hair%20shader%20memory%20regression" | pp
 
 hr
