@@ -36,6 +36,7 @@ the installed ADK version. See the task write-up for the fuller investigation.
 from __future__ import annotations
 
 import os
+import urllib.request
 from pathlib import Path
 
 from google.adk.agents import Agent
@@ -50,10 +51,23 @@ from .instructions import INSTRUCTIONS
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent
 _OPENAPI_SPEC_PATH = _REPO_ROOT / "openapi.yaml"
+_OPENAPI_SPEC_URL = "https://render-farm-triage.vercel.app/openapi.yaml"
+
+
+def _load_openapi_spec() -> str:
+  # Local dev: the full repo checkout has openapi.yaml as agent.py's sibling
+  # at the repo root. Deployed (e.g. Cloud Run): only agent/ itself gets
+  # shipped into the container, so that path doesn't exist there — fall back
+  # to fetching the identical file from the one place it's actually served
+  # from (see openapi.yaml's own header: same file, single source of truth).
+  if _OPENAPI_SPEC_PATH.exists():
+    return _OPENAPI_SPEC_PATH.read_text(encoding="utf-8")
+  with urllib.request.urlopen(_OPENAPI_SPEC_URL, timeout=15) as response:
+    return response.read().decode("utf-8")
 
 
 def _build_diagnostic_toolset() -> OpenAPIToolset:
-  spec_str = _OPENAPI_SPEC_PATH.read_text(encoding="utf-8")
+  spec_str = _load_openapi_spec()
   return OpenAPIToolset(spec_str=spec_str, spec_str_type="yaml")
 
 

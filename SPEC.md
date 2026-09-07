@@ -55,6 +55,7 @@ end.
 | Frontend | Next.js, deployed on Vercel (`render-farm-triage.vercel.app`) |
 | Data | ClickHouse Cloud (`render-farm-triage`, GCP us-central1) |
 | Agent orchestration | Google Agent Builder |
+| Agent runtime | Google ADK (`agent/`), deployed on Cloud Run, GCP project `render-farm-triage`, region us-central1: `https://render-farm-triage-agent-1020031050632.us-central1.run.app` |
 | Model | Gemini |
 | Data generation | Python — numpy, pandas, pyarrow, scipy |
 | Build workflow | Prompts authored in Claude chat, pasted into Claude Code in VS Code |
@@ -274,7 +275,10 @@ Dependencies, not dates. Each step assumes the one before it is done and verifie
 5. Deploy to Vercel with `CLICKHOUSE_*` set, so the routes are reachable over public
    HTTPS — Agent Builder cannot call localhost — **done**, live at
    `render-farm-triage.vercel.app`, all twelve test cases passing against production
-6. Agent Builder wiring and system prompt iteration
+6. Agent Builder wiring and system prompt iteration — **done**, ADK agent
+   (`agent/`) built with both toolsets and iterated system prompt, deployed to
+   Cloud Run and verified over HTTPS at
+   `render-farm-triage-agent-1020031050632.us-central1.run.app`
 7. Interface
 8. Record walkthrough against the seeded dataset; submit early
 

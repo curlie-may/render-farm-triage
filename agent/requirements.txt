@@ -1,2 +1,2 @@
-google-adk[mcp]>=1.0.0
-mcp-clickhouse>=0.5.0
+google-adk[mcp]==2.8.0
+mcp-clickhouse==0.5.0
