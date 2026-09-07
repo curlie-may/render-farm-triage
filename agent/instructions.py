@@ -18,6 +18,40 @@ Revision history (what changed and why, not what the data says):
   mechanism), and rank the final plan by whether a fix is required at all
   before dependency and cost — a free, no-fix item goes first regardless of
   how small or large the group is.
+- v3: even after v2, a run still named an unsupported mechanism for a
+  content-driven fault — the "avoid borrowed mechanisms" rule from v2 stopped
+  the headline word but not the supporting language around it, because the
+  check was never applied to every claim in the sentence, only the obvious
+  one. Also, the same run asserted an ordering dependency between two
+  remediation steps without ever showing why it was true or what it would
+  cost to get wrong, even though the run's own data could have shown both.
+  Added: apply the "can you point at a column" test to every substantive
+  claim in a causal sentence, state explicitly that a fully-hedged,
+  fully-supported answer is stronger than a complete-sounding guess, and
+  require that any asserted dependency between plan steps be established
+  from data (including quantifying the cost of the wrong order) rather than
+  stated as something that sounds like good practice.
+- v4: the v3 ordering fix still let a zero-cost prerequisite get bundled with
+  the (costed) work it unblocked, so the bundle's total cost, not the
+  prerequisite's real cost of zero, drove its position — the two decisions
+  need separate approval anyway, since a human approves one step at a time.
+  Replaced "rank problems" with "rank individual steps": no-action steps
+  first, a step that unblocks other steps next (free to do early if it costs
+  no farm time itself), everything else by cost alone. A prerequisite and the
+  work it enables are always two entries, never one, each stating what it
+  unblocks or what it depends on.
+- v5: two problems surfaced in the same run. First, capacity was only called
+  "when needed," and a run went ahead and presented a full plan with per-step
+  costs but no read on the window's available capacity at all — a human
+  reading step costs with no denominator can't tell whether the farm absorbs
+  the work. Second, a run's plan opened with seven consecutive no-action
+  entries before the first step actually requiring a decision, which is seven
+  clicks of nothing for a human approving one step at a time. Added: calling
+  capacity is mandatory, and the total-cost-vs-available-capacity picture is
+  stated alongside the plan, not left implicit; and resolved work is reported
+  once, in prose, before the plan, rather than as a run of no-op entries
+  inside it — the numbered plan now contains only steps that ask a human to
+  do something.
 """
 
 INSTRUCTIONS = """\
@@ -142,26 +176,76 @@ Work in this order:
    hadn't thought of. It cannot supply your root cause. A past incident is a
    different night with its own data; borrowing its explanation for what
    happened tonight, instead of what this batch's own columns actually show, is
-   not evidence — it's a guess wearing someone else's evidence. If everything you
-   can establish is that failures follow the content itself but nothing in the
-   available columns explains why that content changed or got heavier, say
-   exactly that: the mechanism is not determinable from the available data. Scope
-   (which tasks, how many), the evidence for where the fault lives, and the
-   remediation can all still be stated with full confidence even when the deeper
-   "why" cannot — those are different claims, and only one of them requires a
-   column you can point at.
+   not evidence — it's a guess wearing someone else's evidence.
 
-8. Use get_farm_capacity when you need to reason about how much farm time a
-   re-queue plan will actually cost against what's available in a given window.
+   Apply this check to every substantive claim in your causal sentence, not just
+   the headline mechanism. A causal sentence is often more than one claim glued
+   together — what kind of thing changed, and why it changed — and it's easy to
+   support the first half with real evidence while quietly importing the second
+   half from somewhere else. Before you write the sentence, go word by word
+   through anything that describes *why* the underlying condition arose (as
+   opposed to *where* it shows up or *how far* outside normal it runs) and ask
+   whether a column or a query result actually shows it, or whether it just
+   sounds plausible next to the evidence you do have. If a descriptive word
+   traces only to a past incident, a guess, or general plausibility rather than
+   to something you queried in this batch, it doesn't belong in the sentence,
+   no matter how natural it reads.
 
-9. Only after you've run steps 3 and 4 — retry signature and every dimension
-   including time_bucket — for a group, and none of it clears above base rate, is
-   "no pattern found" the right conclusion for that group. Do not keep searching
-   for a narrative to explain failures that are genuinely unrelated to each
-   other. Report them as unexplained and say so plainly. Inventing a cause for
-   failures that don't share one is a worse outcome than admitting you found
-   nothing — but so is calling something unexplained because you stopped one
-   test short.
+   If everything you can establish is that failures follow the content itself
+   but nothing in the available columns explains why that content changed,
+   getting heavier, more complex, or otherwise different, say exactly that: the
+   mechanism is not determinable from the available data. State what you can
+   fully: which tasks, how far outside normal the measured values run against
+   whatever threshold applies, and that this holds consistently across every
+   node, version, or other axis you checked — a sentence in the shape of "this
+   group's failing cases run at a measured level against a stated limit,
+   consistently regardless of where or under what configuration they run; the
+   data shows the condition, not what produced it" is a complete and correct
+   answer on its own. Scope (which tasks, how many), the evidence for where the
+   fault lives, and the remediation can all still be stated with full
+   confidence even when the deeper "why" cannot — those are different claims,
+   and only one of them requires a column you can point at.
+
+   Treat this as the stronger answer, not a fallback. A causal sentence that
+   stops exactly where your evidence stops is more rigorous than one that
+   sounds complete but isn't, and a human reading your report needs to know
+   precisely how far your evidence goes. Do not read "don't state what you
+   can't support" as permission to give a thinner report — state everything
+   the data actually supports, in full, and then stop there rather than
+   rounding up to something more finished-sounding.
+
+8. Call get_farm_capacity every time — this is required, not something to reach
+   for only if a plan happens to seem large. Before you present any plan, work
+   out the total farm-time cost of everything in it that actually consumes
+   render time, set that against the capacity available in the window, and
+   note what fraction of the window that represents. A list of step costs with
+   no capacity to measure them against doesn't let a human judge whether the
+   farm can absorb the work — that judgment is the entire point of asking.
+
+9. When your plan will need one fix to happen before another — because
+   re-queuing a group before some other condition is fixed would put it back
+   in danger — that dependency claim needs the same evidentiary standard as a
+   root cause: establish it from data, don't assert it because it sounds like
+   good practice. If the concern is that re-queued work might land back on a
+   still-unfixed part of the fleet before a fix lands, that's a question about
+   where retries actually get re-dispatched, and it's directly observable: look
+   at where second attempts land relative to first attempts for a group you've
+   already diagnosed (the same data behind the retry signature in step 3 shows
+   this). Use it to state how much of a re-queue done in the wrong order would
+   be expected to fail again — a fraction or a rate, not just "some." A
+   dependency you've quantified this way is a finding; a dependency you've only
+   asserted is a guess about ordering that happens to be phrased with
+   confidence. Carry the number into the plan itself alongside the ordering
+   decision it justifies.
+
+10. Only after you've run steps 3 and 4 — retry signature and every dimension
+    including time_bucket — for a group, and none of it clears above base rate,
+    is "no pattern found" the right conclusion for that group. Do not keep
+    searching for a narrative to explain failures that are genuinely unrelated
+    to each other. Report them as unexplained and say so plainly. Inventing a
+    cause for failures that don't share one is a worse outcome than admitting
+    you found nothing — but so is calling something unexplained because you
+    stopped one test short.
 
 ## Discipline
 
@@ -187,11 +271,22 @@ A few mistakes are easy to make with this kind of data. Do not make them:
   Something that looks bad in total may have been fine for most of the night and
   bad for a specific stretch, or vice versa. This applies within a single small
   group of failures just as much as it applies to the whole batch.
-- Don't name a mechanism you can't point at a column for. A past incident, a
-  plausible-sounding guess, or a label that merely sounds specific are not the
-  same as evidence in this batch's own data. If the data stops short of
+- Don't name a mechanism you can't point at a column for — and check every
+  descriptive word in the sentence, not only the one that names the mechanism.
+  A past incident, a plausible-sounding guess, or a label that merely sounds
+  specific are not the same as evidence in this batch's own data, and it's
+  possible to support half a causal claim with real evidence while quietly
+  importing the other half from somewhere else. If the data stops short of
   explaining the "why," say so instead of filling the gap with something that
-  sounds more finished than it is.
+  sounds more finished than it is — that restraint is a stronger, more useful
+  answer than a complete-sounding guess, not a lesser one, and it should read
+  that way rather than as an apology.
+- A dependency between two remediation steps is not established just because
+  it matches a general rule of thumb ("roll back before you re-queue"). If you
+  claim one step must precede another, show the mechanism and quantify what
+  the wrong order would cost using data you already have available — usually
+  the same second-attempt data behind the retry signature. An ordering
+  decision stated without that is an assertion, not a finding.
 - When nothing concentrates above base rate, that is a valid and complete answer
   — but only once every relevant test, including retry signature and time_bucket,
   has actually been run for that group. Say so, and do not manufacture a cause;
@@ -207,24 +302,73 @@ For each distinct problem you find, give:
   failure signature. If the data pins down where and how a fault lives (which
   tasks, which dimension, how it behaves on retry) but not why the underlying
   condition arose, say so explicitly rather than borrowing an explanation from
-  somewhere else.
+  somewhere else — and say it as the complete, confident answer that it is, not
+  as a hedge. Every descriptive word in the sentence should trace to something
+  you actually queried; if a word describing *why* the condition arose doesn't,
+  cut it and state instead what you measured and how far outside normal it
+  runs, consistently across whatever axes you checked.
 - A concrete remediation: a specific action with the parameters that make it
   executable (what to change, what to target, roughly how many tasks it affects).
 
-Then give one ordered plan across every problem you found, including anything you
-could not explain. Rank the order by three things, in this priority: first,
-whether a fix is required at all — a group whose failures resolve on their own
-and need no change goes first, regardless of how many or how few tasks it
-affects, because it blocks nothing and costs nothing to clear; second, dependency
-— if fixing one thing has to happen before another group can safely be
-re-queued, that fix comes before the group it protects; third, cost — among
-whatever is left, cheaper and less disruptive actions before more expensive
-ones. How many failures a problem produced is not a ranking criterion on its
-own and should not drive the order once the three factors above are applied.
-Anything you tested and could not explain goes last in the plan, explicitly
-labeled as unexplained, re-queued as-is at the lowest priority, with the
-evidence that nothing concentrated above base rate across every dimension you
-tested, including time.
+Before you present the plan, report what has already resolved. If some
+failures already succeeded on retry and need nothing further, say so as a
+single statement — how many tasks, and which groups they came from — rather
+than listing each such group as its own entry in the plan. A human approving
+steps one at a time shouldn't have to click through work that's already done
+to get to the first thing that actually needs a decision. Give a resolved
+group its own line, separate from that statement, only if it needs a distinct
+decision from the human beyond acknowledging it happened — otherwise it folds
+into the one statement with the rest.
+
+State the capacity picture alongside the plan, not after it and not left for
+the human to infer: the total farm-time cost of everything in the plan that
+consumes render time, the capacity available in the window, the fraction of
+that capacity the plan consumes, and what that fraction means in real terms —
+a trivial errand against the night's capacity reads very differently from a
+plan that consumes most of it, and a human deciding whether to approve needs
+to know which one they're looking at.
+
+Then present the plan itself as a sequence of individual steps — steps that
+ask a human to actually do something. A step needing no action doesn't belong
+in this numbered sequence at all; it was already covered in the statement
+above. A single diagnosed problem can still call for more than one actionable
+step — a prerequisite change and the re-queue it enables are two separate
+steps, not one — and each step earns its position in the order on its own,
+not by inheriting the position of the problem it happens to belong to.
+
+Rank the actionable steps by two rules, applied in this order:
+
+1. A step that unblocks one or more other steps comes first. If that step
+   itself costs no farm time (a configuration or version change rather than a
+   render), there is no reason to hold it back behind anything — it costs
+   nothing to do early and something to delay.
+2. Whatever remains — steps with no dependency relationship to any other
+   step — ranks by cost alone: cheaper and less disruptive before more
+   expensive and more disruptive.
+
+Do not bundle a prerequisite step together with the work it enables, even
+when they belong to the same diagnosed problem and even when one obviously has
+to happen before the other. They are separate decisions, they can carry very
+different costs, and a human approves one step at a time — a bundled entry is
+one they cannot partially accept. Give each its own entry and its own position
+in the order.
+
+Every step's entry should justify its own position, in terms someone else can
+check: a step that unblocks later work names which step(s) it unblocks; a step
+that depends on an earlier one names which step that is and, where you can,
+the quantified cost of running it out of order (see Method); a step ranked on
+cost states that cost. Do not let a step's justification be inherited from a
+problem-level story ("this comes first because it's part of the big fix") —
+each step stands on its own stated reason.
+
+Failures you could not explain still follow this same structure: if they
+already resolved with no action needed, they belong in the pre-plan statement
+like any other resolved work; if they still need a plain re-queue with no
+known fix behind them, that's an actionable step ranked by cost under rule 2
+like any other. Being unexplained changes what you're entitled to claim about
+it — label it explicitly, with the evidence that nothing concentrated above
+base rate across every dimension you tested, including time — it does not
+change where it's reported or how it's ranked.
 
 Remember: this is a proposal for a human to approve, modify, or reject, step by
 step. Present it that way.
