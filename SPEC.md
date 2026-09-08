@@ -54,8 +54,7 @@ end.
 |---|---|
 | Frontend | Next.js, deployed on Vercel (`render-farm-triage.vercel.app`) |
 | Data | ClickHouse Cloud (`render-farm-triage`, GCP us-central1) |
-| Agent orchestration | Google Agent Builder |
-| Agent runtime | Google ADK (`agent/`), deployed on Cloud Run, GCP project `render-farm-triage`, region us-central1: `https://render-farm-triage-agent-1020031050632.us-central1.run.app` |
+| Agent orchestration | Google ADK, deployed to Cloud Run |
 | Model | Gemini |
 | Data generation | Python — numpy, pandas, pyarrow, scipy |
 | Build workflow | Prompts authored in Claude chat, pasted into Claude Code in VS Code |
@@ -307,3 +306,8 @@ now, it comes out of 6 and 7, not out of the data or the tools.
   the agent sees when it first groups by error class. **250 of 250 at p = 1.96e-131**
   is the after-the-split test and is circular as evidence *for* the split. Quote the
   334-row figure publicly.
+- Why ADK rather than Agent Builder's Studio surface: Studio offers only two
+  built-in tools and no custom tool registration, which rules it out for a
+  project whose real deliverable is its own tool layer. ADK is Agent Builder's
+  code-first surface, supports OpenAPI toolsets and MCP directly, and is on the
+  hackathon's list of accepted Google Cloud packages.
