@@ -1,69 +1,235 @@
-import Image from "next/image";
+"use client";
+
+import { useCallback, useMemo, useRef, useState } from "react";
 import styles from "./page.module.css";
+import { TriageControls } from "@/components/TriageControls";
+import { RunStatusBanner } from "@/components/RunStatusBanner";
+import { ActivityFeed } from "@/components/ActivityFeed";
+import { FindingsPanel } from "@/components/FindingsPanel";
+import { PlanPanel } from "@/components/PlanPanel";
+import { DownloadButton } from "@/components/DownloadButton";
+import {
+  ActivityItem,
+  AgentEvent,
+  AgentStreamError,
+  eventToActivityItems,
+  isStreamError,
+} from "@/lib/agentEvents";
+import { parseFindings } from "@/lib/planParser";
+import { buildMarkdownExport, triggerMarkdownDownload, StepApproval } from "@/lib/markdownExport";
+import type { RunStatus } from "@/lib/runTypes";
 
 export default function Home() {
+  const [deliveryTarget, setDeliveryTarget] = useState("");
+  const [capacityInput, setCapacityInput] = useState("");
+  const [status, setStatus] = useState<RunStatus>("idle");
+  const [activity, setActivity] = useState<ActivityItem[]>([]);
+  const [startedAt, setStartedAt] = useState<number | null>(null);
+  const [firstByteAt, setFirstByteAt] = useState<number | null>(null);
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [approvals, setApprovals] = useState<Record<string, StepApproval>>({});
+
+  // Guards against a stale in-flight fetch loop writing state after a new
+  // run has already started (e.g. the user clicks "Run again" quickly).
+  const runToken = useRef(0);
+
+  const inFlight = useMemo(() => {
+    const responded = new Set(
+      activity.filter((a) => a.kind === "tool_response").map((a) => a.key)
+    );
+    return activity.filter(
+      (a): a is Extract<ActivityItem, { kind: "tool_call" }> => a.kind === "tool_call" && !responded.has(a.key)
+    );
+  }, [activity]);
+
+  const inFlightLabel = inFlight.length > 0 ? inFlight.map((c) => c.name).join(", ") : null;
+  const inFlightSince =
+    inFlight.length > 0 ? Math.min(...inFlight.map((c) => c.timestamp)) * 1000 : null;
+
+  const finalAnswerText = useMemo(() => {
+    const textItems = activity.filter((a): a is Extract<ActivityItem, { kind: "text" }> => a.kind === "text");
+    const withFence = [...textItems].reverse().find((t) => t.text.includes("```json"));
+    if (withFence) return withFence.text;
+    if (status === "done" || status === "error") return textItems.at(-1)?.text ?? "";
+    return "";
+  }, [activity, status]);
+
+  const findings = useMemo(() => parseFindings(finalAnswerText), [finalAnswerText]);
+
+  const operatorCapacityHours = useMemo(() => {
+    const n = parseFloat(capacityInput);
+    return Number.isFinite(n) && n > 0 ? n : null;
+  }, [capacityInput]);
+
+  const handleSetApproval = useCallback((id: string, approval: StepApproval) => {
+    setApprovals((prev) => ({ ...prev, [id]: approval }));
+  }, []);
+
+  const startRun = useCallback(async () => {
+    const myToken = ++runToken.current;
+    setActivity([]);
+    setApprovals({});
+    setErrorMessage(null);
+    setFirstByteAt(null);
+    setStartedAt(Date.now());
+    setStatus("connecting");
+
+    try {
+      const res = await fetch("/api/agent/run", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          deliveryTarget: deliveryTarget.trim() || undefined,
+          capacityHours: operatorCapacityHours ?? undefined,
+        }),
+      });
+
+      if (runToken.current !== myToken) return;
+
+      if (!res.ok || !res.body) {
+        const errBody = await res.json().catch(() => ({ error: `HTTP ${res.status}` }));
+        throw new Error(errBody.error ?? `HTTP ${res.status}`);
+      }
+
+      setStatus("running");
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+      let recordedFirstByte = false;
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (runToken.current !== myToken) return;
+        if (done) break;
+
+        if (!recordedFirstByte) {
+          recordedFirstByte = true;
+          setFirstByteAt(Date.now());
+        }
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split("\n");
+        buffer = lines.pop() ?? "";
+
+        for (const line of lines) {
+          if (!line.startsWith("data:")) continue;
+          const data = line.slice(5).trim();
+          if (!data) continue;
+
+          let parsed: AgentEvent | AgentStreamError;
+          try {
+            parsed = JSON.parse(data);
+          } catch {
+            continue;
+          }
+
+          if (isStreamError(parsed)) {
+            setErrorMessage(parsed.error);
+            setActivity((prev) => [
+              ...prev,
+              { kind: "error", key: `stream-error-${Date.now()}`, message: parsed.error, timestamp: Date.now() / 1000 },
+            ]);
+            continue;
+          }
+
+          const items = eventToActivityItems(parsed);
+          if (items.length > 0) setActivity((prev) => [...prev, ...items]);
+        }
+      }
+
+      if (runToken.current !== myToken) return;
+      setStatus("done");
+    } catch (err) {
+      if (runToken.current !== myToken) return;
+      const message = err instanceof Error ? err.message : String(err);
+      setErrorMessage(message);
+      setActivity((prev) => [
+        ...prev,
+        { kind: "error", key: `fatal-${Date.now()}`, message, timestamp: Date.now() / 1000 },
+      ]);
+      setStatus("error");
+    }
+  }, [deliveryTarget, operatorCapacityHours]);
+
+  const handleDownload = useCallback(() => {
+    const content = buildMarkdownExport({
+      generatedAt: new Date(),
+      status: status === "connecting" ? "running" : status === "idle" ? "running" : status,
+      startedAt,
+      activity,
+      prose: findings.prose,
+      plan: findings.plan,
+      approvals,
+      errorMessage,
+    });
+    const stamp = new Date().toISOString().replace(/[:.]/g, "-");
+    triggerMarkdownDownload(`render-farm-triage-${stamp}.md`, content);
+  }, [status, startedAt, activity, findings, approvals, errorMessage]);
+
+  const hasOutput = activity.length > 0;
+  const showFindings = finalAnswerText !== "";
+
   return (
     <div className={styles.page}>
-      <main className={styles.main}>
-        <Image
-          className={styles.logo}
-          src="/next.svg"
-          alt="Next.js logo"
-          width={100}
-          height={20}
-          priority
+      <header className={styles.header}>
+        <h1 className={styles.title}>Render Farm Triage</h1>
+        <p className={styles.subtitle}>
+          Diagnoses last night&rsquo;s batch failures and proposes a re-queue plan. It never executes anything — every
+          step below is a proposal for a human to accept, modify, or reject.
+        </p>
+      </header>
+
+      <section className={styles.controlsSection}>
+        <TriageControls
+          deliveryTarget={deliveryTarget}
+          onDeliveryTargetChange={setDeliveryTarget}
+          capacityInput={capacityInput}
+          onCapacityInputChange={setCapacityInput}
+          status={status}
+          onStart={startRun}
         />
-        <div className={styles.intro}>
-          <h1>
-            To get started, edit the{" "}
-            <code className={styles.code}>page.tsx</code> file.
-          </h1>
-          <p>
-            Looking for a starting point or more instructions? Head over to{" "}
-            <a
-              href="https://vercel.com/templates?framework=next.js&utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              target="_blank"
-              rel="noopener noreferrer"
-            >
-              Templates
-            </a>{" "}
-            or the{" "}
-            <a
-              href="https://nextjs.org/learn?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              target="_blank"
-              rel="noopener noreferrer"
-            >
-              Learning
-            </a>{" "}
-            center.
-          </p>
-        </div>
-        <div className={styles.ctas}>
-          <a
-            className={styles.primary}
-            href="https://vercel.com/new?utm_source=create-next-app&utm_medium=appdir-template&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            <Image
-              className={styles.logo}
-              src="/vercel.svg"
-              alt="Vercel logomark"
-              width={16}
-              height={14}
-            />
-            Deploy Now
-          </a>
-          <a
-            className={styles.secondary}
-            href="https://nextjs.org/docs?utm_source=create-next-app&utm_medium=appdir-template&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            Documentation
-          </a>
-        </div>
-      </main>
+        <RunStatusBanner
+          status={status}
+          startedAt={startedAt}
+          firstByteAt={firstByteAt}
+          inFlightLabel={inFlightLabel}
+          inFlightSince={inFlightSince}
+          errorMessage={errorMessage}
+        />
+      </section>
+
+      <div className={styles.mainGrid}>
+        <section className={styles.activityColumn}>
+          <h2 className={styles.columnTitle}>Live activity</h2>
+          <div className={styles.activityScroll}>
+            <ActivityFeed items={activity} startedAt={startedAt} />
+          </div>
+        </section>
+
+        <section className={styles.resultsColumn}>
+          {!showFindings && (
+            <p className={styles.placeholder}>
+              Findings and the remediation plan will appear here once the run produces its final answer.
+            </p>
+          )}
+          {showFindings && (
+            <>
+              <FindingsPanel prose={findings.prose} />
+              <PlanPanel
+                plan={findings.plan}
+                planError={findings.planError}
+                prose={findings.prose}
+                approvals={approvals}
+                onSetApproval={handleSetApproval}
+                operatorCapacityHours={operatorCapacityHours}
+              />
+            </>
+          )}
+        </section>
+      </div>
+
+      <footer className={styles.footer}>
+        <DownloadButton disabled={!hasOutput} onDownload={handleDownload} />
+      </footer>
     </div>
   );
 }

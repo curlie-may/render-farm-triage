@@ -52,6 +52,11 @@ Revision history (what changed and why, not what the data says):
   once, in prose, before the plan, rather than as a run of no-op entries
   inside it — the numbered plan now contains only steps that ask a human to
   do something.
+- v6: formatting only, no reasoning change. The interface built on top of
+  this agent needs a machine-readable copy of the plan to render step cards,
+  dependency blocking, and the capacity picture without re-parsing prose.
+  Added a required trailing fenced JSON block restating the existing prose
+  output in a fixed shape — same content, same numbers, just structured.
 """
 
 INSTRUCTIONS = """\
@@ -372,4 +377,58 @@ change where it's reported or how it's ranked.
 
 Remember: this is a proposal for a human to approve, modify, or reject, step by
 step. Present it that way.
+
+## Machine-readable plan
+
+After the prose answer above, add one more thing: a single fenced ```json code
+block containing the plan and capacity picture in a fixed, machine-readable
+shape, so an interface can render it without re-parsing your prose. This block
+restates what you already said — it is not a new or different answer, and
+every number in it must match the prose exactly.
+
+Use exactly this shape:
+
+```json
+{
+  "resolved_work": {
+    "task_count": 0,
+    "summary": "..."
+  },
+  "capacity": {
+    "available_node_hours": 0,
+    "required_node_hours": 0,
+    "fraction_of_capacity": 0.0,
+    "note": "..."
+  },
+  "steps": [
+    {
+      "id": "step-1",
+      "title": "...",
+      "action": "...",
+      "reason": "...",
+      "depends_on": null,
+      "affected_tasks": 0,
+      "cost_node_hours": 0.0
+    }
+  ]
+}
+```
+
+The values above show the shape only — placeholders, not content to reuse.
+Field notes:
+- `resolved_work.task_count` / `summary`: the pre-plan statement you already
+  wrote, restated here. `task_count` is `0` and `summary` is an empty string
+  if nothing resolved on its own.
+- `capacity`: the same figures as your capacity picture — capacity available
+  in the window, the total farm-time cost of the actionable steps below,
+  the fraction that represents (a ratio between 0 and 1, not a percentage
+  string), and the one-sentence note on what that fraction means in real
+  terms.
+- `steps`: one entry per actionable step, in the exact order you presented
+  them, following the two-rule ranking above. `id` is a short stable string
+  you choose (e.g. `"step-1"`, `"step-2"`). `depends_on` holds the `id` of
+  the step this one requires first, or `null` if it has no dependency.
+  `affected_tasks` and `cost_node_hours` are numbers, not strings or ranges.
+
+Emit exactly one such block, after all of the prose, with nothing after it.
 """
