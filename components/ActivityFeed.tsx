@@ -20,7 +20,7 @@ function relTime(startedAt: number | null, timestamp: number): string {
 function ToolCallRow({ item, startedAt }: { item: Extract<ActivityItem, { kind: "tool_call" }>; startedAt: number | null }) {
   const args = formatArgs(item.args);
   return (
-    <li className={`${styles.activityItem} ${styles.activityCall}`}>
+    <li data-testid="activity-tool_call" className={`${styles.activityItem} ${styles.activityCall}`}>
       <div className={styles.activityHead}>
         <span className={styles.activityIcon} aria-hidden>
           ▶
@@ -58,7 +58,11 @@ function ToolResponseRow({
 }) {
   const { text, isError } = summarizeToolResponse(item.response);
   return (
-    <li className={`${styles.activityItem} ${styles.activityResponse} ${isError ? styles.activityErrorRow : ""}`}>
+    <li
+      data-testid="activity-tool_response"
+      data-is-error={isError}
+      className={`${styles.activityItem} ${styles.activityResponse} ${isError ? styles.activityErrorRow : ""}`}
+    >
       <div className={styles.activityHead}>
         <span className={styles.activityIcon} aria-hidden>
           {isError ? "⚠" : "✓"}
@@ -74,7 +78,7 @@ function ToolResponseRow({
 
 function TextRow({ item, startedAt }: { item: Extract<ActivityItem, { kind: "text" }>; startedAt: number | null }) {
   return (
-    <li className={`${styles.activityItem} ${styles.activityText}`}>
+    <li data-testid="activity-text" className={`${styles.activityItem} ${styles.activityText}`}>
       <div className={styles.activityHead}>
         <span className={styles.activityIcon} aria-hidden>
           💬
@@ -89,7 +93,7 @@ function TextRow({ item, startedAt }: { item: Extract<ActivityItem, { kind: "tex
 
 function ErrorRow({ item }: { item: Extract<ActivityItem, { kind: "error" }> }) {
   return (
-    <li className={`${styles.activityItem} ${styles.activityErrorRow}`}>
+    <li data-testid="activity-error" className={`${styles.activityItem} ${styles.activityErrorRow}`}>
       <div className={styles.activityHead}>
         <span className={styles.activityIcon} aria-hidden>
           ⚠

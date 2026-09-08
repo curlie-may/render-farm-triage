@@ -6,7 +6,7 @@ import styles from "@/app/page.module.css";
 
 export function FindingsPanel({ prose }: { prose: string }) {
   return (
-    <section className={styles.panel}>
+    <section data-testid="findings-panel" className={styles.panel}>
       <h2 className={styles.panelTitle}>Findings</h2>
       <div className={styles.markdown}>
         <ReactMarkdown remarkPlugins={[remarkGfm]}>{prose}</ReactMarkdown>

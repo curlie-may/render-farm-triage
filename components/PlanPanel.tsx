@@ -42,7 +42,11 @@ function StepCard({
   const status = approval.status;
 
   return (
-    <li className={`${styles.stepCard} ${isBlocked ? styles.stepBlocked : ""}`}>
+    <li
+      data-testid="step-card"
+      data-blocked={isBlocked}
+      className={`${styles.stepCard} ${isBlocked ? styles.stepBlocked : ""}`}
+    >
       <div className={styles.stepHeader}>
         <span className={styles.stepIndex}>{index + 1}</span>
         <h3 className={styles.stepTitle}>{step.title}</h3>
@@ -154,9 +158,9 @@ function StepCard({
 export function PlanPanel({ plan, planError, prose, approvals, onSetApproval, operatorCapacityHours }: Props) {
   if (!plan) {
     return (
-      <section className={styles.panel}>
+      <section data-testid="plan-panel" className={styles.panel}>
         <h2 className={styles.panelTitle}>Plan</h2>
-        <p className={styles.warningNote}>
+        <p data-testid="plan-unavailable-warning" className={styles.warningNote}>
           The structured plan view is unavailable{planError ? ` (${planError})` : " (no plan block was found)"}. Showing
           the plan as written instead.
         </p>
@@ -176,7 +180,7 @@ export function PlanPanel({ plan, planError, prose, approvals, onSetApproval, op
   const operatorShortfall = operatorPct !== null && operatorPct > 100;
 
   return (
-    <section className={styles.panel}>
+    <section data-testid="plan-panel" className={styles.panel}>
       <h2 className={styles.panelTitle}>Plan</h2>
       <p className={styles.mutedNote}>
         This is a proposal only. Accepting, modifying, or rejecting a step below changes nothing on the farm — it only

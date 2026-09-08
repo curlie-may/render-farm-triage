@@ -52,11 +52,19 @@ export function isStreamError(
 
 /** One line of activity for the live feed / downloadable log. Mirrors what a
  * single Event can carry, but flattened to one kind per item since the feed
- * renders top to bottom in arrival order. */
+ * renders top to bottom in arrival order.
+ *
+ * `key` is unique per item for React's sake. `callId` is the id ADK's
+ * functionCall/functionResponse pair shares — it correlates a call with its
+ * response, but is NOT globally unique across a whole run: a live run
+ * against the deployed agent showed the same id reused across unrelated
+ * calls, which broke both React's keys and call/response matching when they
+ * shared one field. Keep them separate. */
 export type ActivityItem =
   | {
       kind: "tool_call";
       key: string;
+      callId: string;
       author: string;
       name: string;
       args: Record<string, unknown>;
@@ -65,6 +73,7 @@ export type ActivityItem =
   | {
       kind: "tool_response";
       key: string;
+      callId: string;
       author: string;
       name: string;
       response: unknown;
@@ -101,7 +110,8 @@ export function eventToActivityItems(event: AgentEvent): ActivityItem[] {
     if (part.functionCall) {
       items.push({
         kind: "tool_call",
-        key: part.functionCall.id ?? nextKey("call"),
+        key: nextKey("call"),
+        callId: part.functionCall.id ?? "",
         author,
         name: part.functionCall.name,
         args: part.functionCall.args ?? {},
@@ -111,7 +121,8 @@ export function eventToActivityItems(event: AgentEvent): ActivityItem[] {
     if (part.functionResponse) {
       items.push({
         kind: "tool_response",
-        key: part.functionResponse.id ?? nextKey("response"),
+        key: nextKey("response"),
+        callId: part.functionResponse.id ?? "",
         author,
         name: part.functionResponse.name,
         response: part.functionResponse.response,

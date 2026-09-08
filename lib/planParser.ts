@@ -100,6 +100,21 @@ function coercePlan(raw: unknown): AgentPlan | null {
   };
 }
 
+/** The agent tends to introduce the trailing JSON block with its own heading
+ * (echoing "## Machine-readable plan" from the instructions) or a horizontal
+ * rule, since from its side that's just another section of one continuous
+ * answer. Once the fence itself is cut out for the Plan panel, that heading
+ * is left dangling with nothing under it. Strip trailing heading-only and
+ * rule-only lines so the prose ends cleanly on real content. */
+function stripTrailingSectionNoise(text: string): string {
+  let result = text;
+  const trailingNoise = /(^|\n)\s*(#{1,6}[^\n]*|-{3,}|\*{3,}|_{3,})\s*$/;
+  while (trailingNoise.test(result)) {
+    result = result.replace(trailingNoise, "").trimEnd();
+  }
+  return result;
+}
+
 export function parseFindings(fullText: string): ParsedFindings {
   const matches = [...fullText.matchAll(FENCE_RE)];
   if (matches.length === 0) {
@@ -109,7 +124,7 @@ export function parseFindings(fullText: string): ParsedFindings {
   // The instructions ask for exactly one block, at the end. If the model
   // emits more than one anyway, the last one is the one meant to be final.
   const last = matches[matches.length - 1];
-  const prose = fullText.slice(0, last.index).trim();
+  const prose = stripTrailingSectionNoise(fullText.slice(0, last.index).trim());
   const jsonText = last[1].trim();
 
   try {

@@ -33,13 +33,22 @@ export default function Home() {
   // run has already started (e.g. the user clicks "Run again" quickly).
   const runToken = useRef(0);
 
+  // A chronological walk, not a set-difference on ids: the deployed agent
+  // has been observed reusing the same functionCall id across unrelated
+  // calls in one run, so pairing must track "the most recently opened call
+  // for this id," not just "has this id ever been responded to."
   const inFlight = useMemo(() => {
-    const responded = new Set(
-      activity.filter((a) => a.kind === "tool_response").map((a) => a.key)
-    );
-    return activity.filter(
-      (a): a is Extract<ActivityItem, { kind: "tool_call" }> => a.kind === "tool_call" && !responded.has(a.key)
-    );
+    const pending = new Map<string, Extract<ActivityItem, { kind: "tool_call" }>>();
+    let unkeyedCounter = 0;
+    for (const item of activity) {
+      if (item.kind === "tool_call") {
+        const k = item.callId || `__unkeyed_call_${unkeyedCounter++}`;
+        pending.set(k, item);
+      } else if (item.kind === "tool_response" && item.callId) {
+        pending.delete(item.callId);
+      }
+    }
+    return [...pending.values()];
   }, [activity]);
 
   const inFlightLabel = inFlight.length > 0 ? inFlight.map((c) => c.name).join(", ") : null;
